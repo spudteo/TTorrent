@@ -1,35 +1,61 @@
 use std::io::Read;
+use percent_encoding::{percent_encode, NON_ALPHANUMERIC};
+
 use crate::parser::bencode;
 use crate::parser::bencode::{encode_bencode, BencodeValue};
 use sha1::{Digest, Sha1};
 use sha1::digest::typenum::Length;
+use url::Url;
 
 #[derive(Debug)]
 pub struct TorrentFile{
-    announce : String,
+    pub announce : String,
     name : String,
     length : i64,
     piece_length : i64,
     pieces: Vec<[u8;20]>,
-    info_hash : [u8; 20],
+    pub info_hash : [u8; 20],
 }
 
 impl TorrentFile {
     pub fn new(announce: String, name: String, length: i64, piece_length : i64, pieces : Vec<[u8;20]>, info_hash : [u8; 20]) -> Self {
         Self { announce,name,length, piece_length, pieces, info_hash}
     }
+    pub fn build_tracker_url(&self) -> Result<String, Box<dyn std::error::Error>> {
+        let mut url = Url::parse(&self.announce)?;
+
+        let info_hash_encoded = percent_encode(&self.info_hash, NON_ALPHANUMERIC).to_string();
+
+        let query = format!(
+            "info_hash={}&peer_id={}",
+            info_hash_encoded,
+            "01234567890123456789"
+        );
+        url.set_query(Some(&query));
+        Ok(url.to_string())
+    }
 
     pub fn new_from_bencode(bencode: &BencodeValue) -> Result<Self, String> {
         let announce = Self::find_key_string_in_bencode(bencode, "announce".to_string())?;
-        let name = Self::find_key_string_in_bencode(bencode, "name".to_string())?;
-        let length = Self::find_key_integer_in_bencode(bencode, "length".to_string())?;
-        let piece_length = Self::find_key_integer_in_bencode(bencode, "piece length".to_string())?;
         let bencode_info = Self::find_key_dict_in_bencode(bencode, "info".to_string())?;
         let info_hash = Self::compute_info_hash(&bencode_info);
-        let all_pieces = Self::find_key_bytes_in_bencode(bencode, "pieces".to_string())?;
-        let pieces = Self::divide_pieces(&all_pieces);
+        let info = "info".as_bytes();
+        let info_bencode = match bencode {
+            BencodeValue::Dictionary(d) => d.get(&info.to_vec()),
+            _ => Option::None
+        };
 
-        Ok(TorrentFile::new(announce,name,length,piece_length,pieces,info_hash))
+        match info_bencode {
+            Some(info_bencode) => {
+                let name = Self::find_key_string_in_bencode(info_bencode, "name".to_string())?;
+                let length = Self::find_key_integer_in_bencode(info_bencode, "length".to_string())?;
+                let piece_length = Self::find_key_integer_in_bencode(info_bencode, "piece length".to_string())?;
+                let all_pieces = Self::find_key_bytes_in_bencode(info_bencode, "pieces".to_string())?;
+                let pieces = Self::divide_pieces(&all_pieces);
+                Ok(TorrentFile::new(announce,name,length,piece_length,pieces,info_hash))
+            }
+            None => Err("info key not found".to_string())
+        }
     }
 
     fn divide_pieces(pieces: &Vec<u8>) -> Vec<[u8;20]> {
