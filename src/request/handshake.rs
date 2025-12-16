@@ -1,31 +1,37 @@
+use crate::parser::peers::Peer;
 use std::io::Error;
-use tokio::net::TcpStream;
-use tokio::io::{AsyncWriteExt, AsyncReadExt};
 use std::net::SocketAddr;
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 use tokio::time::timeout;
-use crate::parser::peers::Peer;
 
 #[derive(Debug)]
 pub struct Handshake {
-    pstrlen : u8,
-    pstr : [u8; 19],
-    reserved:[u8; 8],
+    pstrlen: u8,
+    pstr: [u8; 19],
+    reserved: [u8; 8],
     info_hash: [u8; 20],
-    peer_id:[u8; 20]
+    peer_id: [u8; 20],
 }
 
 // handshake: <pstrlen><pstr><reserved><info_hash><peer_id>
 //1:19:8:20:20
 
 impl Handshake {
-    pub fn new(info_hash: [u8; 20], peer_id:[u8; 20]) -> Self {
+    pub fn new(info_hash: [u8; 20], peer_id: [u8; 20]) -> Self {
         let p = *b"BitTorrent protocol";
         let plen = p.len() as u8;
-        Self {pstrlen : plen , pstr : p,reserved: [0; 8],info_hash,peer_id }
+        Self {
+            pstrlen: plen,
+            pstr: p,
+            reserved: [0; 8],
+            info_hash,
+            peer_id,
+        }
     }
 
-    pub fn parse(input_bytes : [u8;68]) -> Self {
+    pub fn parse(input_bytes: [u8; 68]) -> Self {
         let pstrlen = input_bytes[0];
         let mut pstr = [0u8; 19];
         pstr.copy_from_slice(&input_bytes[1..20]);
@@ -35,30 +41,33 @@ impl Handshake {
         info_hash.copy_from_slice(&input_bytes[28..48]);
         let mut peer_id = [0u8; 20];
         peer_id.copy_from_slice(&input_bytes[48..68]);
-        Self{pstrlen,pstr,reserved,info_hash,peer_id}
+        Self {
+            pstrlen,
+            pstr,
+            reserved,
+            info_hash,
+            peer_id,
+        }
     }
 
-    pub fn to_bytes(self : Self)  -> [u8;68] {
+    pub fn to_bytes(self: Self) -> [u8; 68] {
         let mut out = [0u8; 68];
         let mut pos = 1;
         out[0] = self.pstrlen;
-        out[pos..pos+self.pstr.len()].copy_from_slice(&self.pstr);
+        out[pos..pos + self.pstr.len()].copy_from_slice(&self.pstr);
         pos += self.pstr.len();
-        out[pos..pos+self.reserved.len()].copy_from_slice(&self.reserved);
+        out[pos..pos + self.reserved.len()].copy_from_slice(&self.reserved);
         pos += self.reserved.len();
-        out[pos..pos+self.info_hash.len()].copy_from_slice(&self.info_hash);
+        out[pos..pos + self.info_hash.len()].copy_from_slice(&self.info_hash);
         pos += self.info_hash.len();
-        out[pos..pos+self.peer_id.len()].copy_from_slice(&self.peer_id);
+        out[pos..pos + self.peer_id.len()].copy_from_slice(&self.peer_id);
         pos += self.peer_id.len();
         out
     }
 
-    pub async fn shake(self, peer: &Peer) -> Result<[u8; 68], Error>{
+    pub async fn shake(self, peer: &Peer) -> Result<[u8; 68], Error> {
         let socket = SocketAddr::new(peer.ip_addr, peer.port_number as u16);
-        let mut stream = timeout(
-            Duration::from_secs(5),
-            TcpStream::connect(socket)
-        ).await??;
+        let mut stream = timeout(Duration::from_secs(5), TcpStream::connect(socket)).await??;
         let data = self.to_bytes();
         stream.write_all(&data).await?;
         let mut buf = [0u8; 68];
@@ -73,4 +82,3 @@ impl Handshake {
         }
     }
 }
-

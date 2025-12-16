@@ -1,3 +1,3 @@
 pub mod bencode;
-pub mod torrent_file;
 pub mod peers;
+pub mod torrent_file;
