@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let one_client = Client::new(torrent, announce.peers[0]);
     let piece_received = one_client.download_from_peer(3).await?;
-    println!("{:?}", piece_received);
+    println!("{:?}", piece_received.len());
 
     // for peer in &announce.peers {
     //     let peer_id = *b"01234567890123456789";

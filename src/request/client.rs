@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use crate::parser::peers::Peer;
 use crate::parser::torrent_file::TorrentFile;
 use crate::request::handshake::Handshake;
@@ -13,6 +14,9 @@ use crate::request::message::Message;
 use crate::request::torrent_message::TorrentMessage;
 use thiserror::Error;
 use tokio::time::error::Elapsed;
+
+
+const PAYLOAD_LENGTH: u32 = 16384;
 
 #[derive(Debug, Error)]
 pub enum ClientError {
@@ -74,41 +78,66 @@ impl Client {
     async fn make_request_for_block(
         stream: &mut TcpStream,
         index: usize,
-        bytes_already_read: usize,
+        missing_block: &mut HashSet<usize>,
     ) -> Result<(), ClientError> {
-        let payload_length = 16384;
-        let request = TorrentMessage::Request {
-            index: index as u32,
-            begin: bytes_already_read as u32,
-            length: payload_length,
+        //pick one block, download it, begin is exactly the block length per the index block
+        let next_block = missing_block.iter().next();
+        match next_block {
+            Some(block) => {
+                let request = TorrentMessage::Request {
+                    index: index as u32,
+                    begin: (block * PAYLOAD_LENGTH as usize) as u32,
+                    length: PAYLOAD_LENGTH,
+                }.to_bytes();
+                println!("request done : {:?}", request);
+                let write = stream.write_all(&request).await;
+                match write {
+                    Ok(_) => Ok(()),
+                    Err(e) => {
+                        return Err(ClientError::Io(e));
+                    }
+                }
+            }
+            None => Err(ClientError::BlockNotPresent(index))
         }
-        .to_bytes();
-        println!("request done : {:?}", request);
-        let write = stream.write_all(&request).await;
-        match write {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                return Err(ClientError::Io(e));
+    }
+
+    fn build_piece_from_blocks(&self,downloaded_blocks: &mut Vec<Option<Vec<u8>>>) -> Vec<u8> {
+        let mut final_piece = Vec::with_capacity(self.torrent_file.piece_length as usize);
+        for block_opt in downloaded_blocks {
+            if let Some(block_data) = block_opt {
+                final_piece.extend_from_slice(&block_data);
             }
         }
+        final_piece
     }
 
     async fn message_handler(
         &self,
         stream: &mut TcpStream,
-        piece_id: u32,
-        bitfield: &mut Vec<u8>,
-        chocked: &mut bool,
+        piece_id: u32
     ) -> Result<Vec<u8>, ClientError> {
-        let mut bytes_downloaded: Vec<u8> = Vec::new();
+        let mut chocked = true;
+        let mut bitfield_message: Option<TorrentMessage> = None;
+        let total_request_to_do = (self.torrent_file.piece_length as f32 / PAYLOAD_LENGTH as f32).ceil() as usize;
+        let mut downloaded_blocks: Vec<Option<Vec<u8>>> = vec![None; total_request_to_do];
+        let mut missing_block: HashSet<usize> = HashSet::with_capacity(total_request_to_do);
+        missing_block.extend(0..total_request_to_do);
+
         loop {
-            if bytes_downloaded.len() == self.torrent_file.piece_length as usize {
-                return Ok((*bytes_downloaded).to_owned());
+            //exit the loop if all the blocks have been downloaded for the piece
+            if missing_block.is_empty() {
+                return Ok(Self::build_piece_from_blocks(self, &mut downloaded_blocks))
             }
-            if bitfield.len() > 1 && !*chocked {
-                Self::make_request_for_block(stream, piece_id as usize, bytes_downloaded.len())
-                    .await?;
+
+            //request a block
+            if let Some(ref msg) = bitfield_message {
+                if msg.source_has_piece(piece_id) && !chocked {
+                    Self::make_request_for_block(stream, piece_id as usize, &mut missing_block).await?;
+                }
             }
+
+            //reads the messages
             let mut init_buf = [0u8; 4];
             let n = stream.read(&mut init_buf).await?;
             let message_length = match n == 4 {
@@ -120,11 +149,11 @@ impl Client {
             let message = TorrentMessage::read(&message_buf);
             match message {
                 TorrentMessage::KeepAlive => continue,
-                TorrentMessage::Bitfield { bitfield: received } => match bitfield.len() > 1 {
-                    true => continue,
-                    false => {
-                        println!("received bitfield");
-                        *bitfield = received
+                TorrentMessage::Bitfield { bitfield: received } => {
+                    println!("bitfield received");
+                    match bitfield_message {
+                        Some(_) => continue,
+                        None => bitfield_message = Some(TorrentMessage::Bitfield { bitfield: received }),
                     }
                 },
                 TorrentMessage::Piece {
@@ -133,15 +162,17 @@ impl Client {
                     block,
                 } => {
                     println!("received piece.. {:?}, {:?}", index, begin);
-                    bytes_downloaded.extend(block)
+                    let block_index = ((begin as usize) / (PAYLOAD_LENGTH as usize));
+                    missing_block.remove(&block_index);
+                    downloaded_blocks[block_index] = Some(block);
                 }
                 TorrentMessage::Unchoke => {
                     println!("unchoked by the server");
-                    *chocked = false
+                    chocked = false
                 }
                 TorrentMessage::Choke => {
                     println!("Choked by the server");
-                    *chocked = true
+                    chocked = true
                 }
                 _ => {}
             }
@@ -165,13 +196,17 @@ impl Client {
         if !Client::handshake_done(&mut stream, handshake).await? {
             return Err(ClientError::Handshake);
         }
-        let mut bitfield: Vec<u8> = Vec::new();
-        let piece =
-            Self::message_handler(self, &mut stream, piece_id, &mut bitfield, &mut true).await?;
 
-        match Self::piece_hash_is_correct(&piece, self.torrent_file.pieces[piece_id as usize]) {
-            true => Ok(piece),
-            false => Err(ClientError::CorruptedPiece),
+
+        loop {
+            let piece =
+                Self::message_handler(self, &mut stream, piece_id).await?;
+
+            match Self::piece_hash_is_correct(&piece, self.torrent_file.pieces[piece_id as usize]) {
+                true => return Ok(piece),
+                false => continue,
+            }
         }
+
     }
 }
