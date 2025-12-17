@@ -96,19 +96,22 @@ impl Client {
     async fn message_handler(
         &self,
         stream: &mut TcpStream,
-        piece_id: u32,
-        bitfield: &mut Vec<u8>,
-        chocked: &mut bool,
+        piece_id: u32
     ) -> Result<Vec<u8>, ClientError> {
         let mut bytes_downloaded: Vec<u8> = Vec::new();
+        let mut chocked = true;
+        let mut bitfield_message: Option<TorrentMessage> = None;
         loop {
             if bytes_downloaded.len() == self.torrent_file.piece_length as usize {
                 return Ok((*bytes_downloaded).to_owned());
             }
-            if bitfield.len() > 1 && !*chocked {
-                Self::make_request_for_block(stream, piece_id as usize, bytes_downloaded.len())
-                    .await?;
+
+            if let Some(ref msg) = bitfield_message {
+                if msg.source_has_piece(piece_id) && !chocked {
+                    Self::make_request_for_block(stream, piece_id as usize, bytes_downloaded.len()).await?;
+                }
             }
+
             let mut init_buf = [0u8; 4];
             let n = stream.read(&mut init_buf).await?;
             let message_length = match n == 4 {
@@ -120,11 +123,10 @@ impl Client {
             let message = TorrentMessage::read(&message_buf);
             match message {
                 TorrentMessage::KeepAlive => continue,
-                TorrentMessage::Bitfield { bitfield: received } => match bitfield.len() > 1 {
-                    true => continue,
-                    false => {
-                        println!("received bitfield");
-                        *bitfield = received
+                TorrentMessage::Bitfield { bitfield: received } => {
+                    match bitfield_message {
+                        Some(_) => continue,
+                        None => bitfield_message = Some(TorrentMessage::Bitfield { bitfield: received }),
                     }
                 },
                 TorrentMessage::Piece {
@@ -137,11 +139,11 @@ impl Client {
                 }
                 TorrentMessage::Unchoke => {
                     println!("unchoked by the server");
-                    *chocked = false
+                    chocked = false
                 }
                 TorrentMessage::Choke => {
                     println!("Choked by the server");
-                    *chocked = true
+                    chocked = true
                 }
                 _ => {}
             }
@@ -165,9 +167,8 @@ impl Client {
         if !Client::handshake_done(&mut stream, handshake).await? {
             return Err(ClientError::Handshake);
         }
-        let mut bitfield: Vec<u8> = Vec::new();
         let piece =
-            Self::message_handler(self, &mut stream, piece_id, &mut bitfield, &mut true).await?;
+            Self::message_handler(self, &mut stream, piece_id).await?;
 
         match Self::piece_hash_is_correct(&piece, self.torrent_file.pieces[piece_id as usize]) {
             true => Ok(piece),
