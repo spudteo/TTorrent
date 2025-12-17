@@ -81,7 +81,7 @@ impl TorrentMessage {
         }
     }
 
-    pub fn source_has_piece(&self, index: u32) -> bool {
+    pub fn source_has_piece(&self, index: usize) -> bool {
         match self {
             TorrentMessage::Bitfield { bitfield } => {
                 //the byte num represent the index byte where we can find if the index n is set.
@@ -90,7 +90,7 @@ impl TorrentMessage {
                 //so by making the bitwise and if the result have a 1 it was in the same position
                 //therefore if it is not a zero it means that it has matched the position and that the index
                 //is contained. We used the mask since it is big endian
-                let byte_num = (index / 8) as usize;
+                let byte_num = (index / 8);
                 if byte_num > bitfield.len() - 1 {
                     panic!(
                         "Bitfield index out of bounds: {} > {}",
