@@ -7,7 +7,7 @@ use sha1::digest::typenum::Length;
 use sha1::{Digest, Sha1};
 use url::Url;
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct TorrentFile {
     pub announce: String,
     name: String,

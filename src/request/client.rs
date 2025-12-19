@@ -1,10 +1,11 @@
-use std::collections::{HashMap, HashSet};
 use crate::parser::peers::Peer;
 use crate::parser::torrent_file::TorrentFile;
 use crate::request::handshake::Handshake;
 use sha1::{Digest, Sha1};
+use std::collections::{HashMap, HashSet};
 use std::io::Error;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -14,12 +15,16 @@ use crate::request::message::Message;
 use crate::request::torrent_message::TorrentMessage;
 use thiserror::Error;
 use tokio::time::error::Elapsed;
-
+use crate::request::peer_stream::PeerStream;
+use async_channel::{unbounded, Receiver, Sender};
+use tokio::time::sleep;
 
 const PAYLOAD_LENGTH: u32 = 16384;
 
 #[derive(Debug, Error)]
 pub enum ClientError {
+    #[error("Couldn't read any data from the peer")]
+    NoBytesInStream,
     #[error("the piece downloaded has a different hash than expected")]
     CorruptedPiece,
     #[error("problem with handshake")]
@@ -42,140 +47,17 @@ impl From<Elapsed> for ClientError {
 
 pub struct Client {
     torrent_file: TorrentFile,
-    peer: Peer,
+    peer: Vec<Peer>,
     client_peer_id: [u8; 20],
 }
 
 impl Client {
-    pub fn new(torrent_file: TorrentFile, peer: Peer) -> Client {
+    pub fn new(torrent_file: TorrentFile, peer: Vec<Peer>) -> Client {
         let client_per_id = *b"01234567890123456789";
         Self {
             torrent_file,
             peer,
             client_peer_id: client_per_id,
-        }
-    }
-
-    pub async fn handshake_done(
-        stream: &mut TcpStream,
-        handshake: Handshake,
-    ) -> Result<bool, Error> {
-        let data = handshake.to_bytes();
-        stream.write_all(&data).await?;
-        let mut buf = [0u8; 68];
-        let n = stream.read(&mut buf).await?;
-        if n > 0 {
-            Ok(true)
-            //check that handshake is ok in buf
-        } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "peer closed connection without sending handshake, buff looks empty",
-            ))
-        }
-    }
-
-    async fn make_request_for_block(
-        stream: &mut TcpStream,
-        index: usize,
-        missing_block: &mut HashSet<usize>,
-    ) -> Result<(), ClientError> {
-        //pick one block, download it, begin is exactly the block length per the index block
-        let next_block = missing_block.iter().next();
-        match next_block {
-            Some(block) => {
-                let request = TorrentMessage::Request {
-                    index: index as u32,
-                    begin: (block * PAYLOAD_LENGTH as usize) as u32,
-                    length: PAYLOAD_LENGTH,
-                }.to_bytes();
-                println!("request done : {:?}", request);
-                let write = stream.write_all(&request).await;
-                match write {
-                    Ok(_) => Ok(()),
-                    Err(e) => {
-                        return Err(ClientError::Io(e));
-                    }
-                }
-            }
-            None => Err(ClientError::BlockNotPresent(index))
-        }
-    }
-
-    fn build_piece_from_blocks(&self,downloaded_blocks: &mut Vec<Option<Vec<u8>>>) -> Vec<u8> {
-        let mut final_piece = Vec::with_capacity(self.torrent_file.piece_length as usize);
-        for block_opt in downloaded_blocks {
-            if let Some(block_data) = block_opt {
-                final_piece.extend_from_slice(&block_data);
-            }
-        }
-        final_piece
-    }
-
-    async fn message_handler(
-        &self,
-        stream: &mut TcpStream,
-        piece_id: u32
-    ) -> Result<Vec<u8>, ClientError> {
-        let mut chocked = true;
-        let mut bitfield_message: Option<TorrentMessage> = None;
-        let total_request_to_do = (self.torrent_file.piece_length as f32 / PAYLOAD_LENGTH as f32).ceil() as usize;
-        let mut downloaded_blocks: Vec<Option<Vec<u8>>> = vec![None; total_request_to_do];
-        let mut missing_block: HashSet<usize> = HashSet::with_capacity(total_request_to_do);
-        missing_block.extend(0..total_request_to_do);
-
-        loop {
-            //exit the loop if all the blocks have been downloaded for the piece
-            if missing_block.is_empty() {
-                return Ok(Self::build_piece_from_blocks(self, &mut downloaded_blocks))
-            }
-
-            //request a block
-            if let Some(ref msg) = bitfield_message {
-                if msg.source_has_piece(piece_id) && !chocked {
-                    Self::make_request_for_block(stream, piece_id as usize, &mut missing_block).await?;
-                }
-            }
-
-            //reads the messages
-            let mut init_buf = [0u8; 4];
-            let n = stream.read(&mut init_buf).await?;
-            let message_length = match n == 4 {
-                true => u32::from_be_bytes(init_buf[0..4].try_into().unwrap()) as usize,
-                false => 0,
-            };
-            let mut message_buf = vec![0u8; message_length];
-            stream.read_exact(&mut message_buf).await?;
-            let message = TorrentMessage::read(&message_buf);
-            match message {
-                TorrentMessage::KeepAlive => continue,
-                TorrentMessage::Bitfield { bitfield: received } => {
-                    println!("bitfield received");
-                    match bitfield_message {
-                        Some(_) => continue,
-                        None => bitfield_message = Some(TorrentMessage::Bitfield { bitfield: received }),
-                    }
-                },
-                TorrentMessage::Piece {
-                    index,
-                    begin,
-                    block,
-                } => {
-                    println!("received piece.. {:?}, {:?}", index, begin);
-                    let block_index = ((begin as usize) / (PAYLOAD_LENGTH as usize));
-                    missing_block.remove(&block_index);
-                    downloaded_blocks[block_index] = Some(block);
-                }
-                TorrentMessage::Unchoke => {
-                    println!("unchoked by the server");
-                    chocked = false
-                }
-                TorrentMessage::Choke => {
-                    println!("Choked by the server");
-                    chocked = true
-                }
-                _ => {}
-            }
         }
     }
 
@@ -187,26 +69,79 @@ impl Client {
         hash_value == checksum
     }
 
-    pub async fn download_from_peer(&self, piece_id: u32) -> Result<Vec<u8>, ClientError> {
-        //create tcp connection
-        let socket = SocketAddr::new(self.peer.ip_addr, self.peer.port_number as u16);
-        let mut stream = timeout(Duration::from_secs(5), TcpStream::connect(socket)).await??;
-        //handshake
-        let handshake = Handshake::new(self.torrent_file.info_hash, self.client_peer_id);
-        if !Client::handshake_done(&mut stream, handshake).await? {
-            return Err(ClientError::Handshake);
+    pub async fn download_torrent(&self, number_of_peers: usize) -> Result<Vec<u8>, ClientError> {
+        let (transmitter_work, receiver_work) = unbounded::<usize>();
+        let (transmitter_piece, receiver_piece) = unbounded::<(usize,Vec<u8>)>();
+        //fixme investigate arc
+        let torrent_file = Arc::new(self.torrent_file.clone());
+        let client_id = Arc::new(self.client_peer_id.clone());
+        let peer_info = Arc::new(self.peer.clone());
+
+        //create peer to download
+        for slave_id in 1..= number_of_peers {
+            let rx = receiver_work.clone();
+            let tx = transmitter_piece.clone();
+            let t_file = Arc::clone(&torrent_file);
+            let c_id = Arc::clone(&client_id);
+            let p_info = Arc::clone(&peer_info);
+
+            tokio::spawn(async move {
+                println!("Creating slave downloader {} ", slave_id);
+                let mut peer_stream = PeerStream::new(slave_id,&p_info[slave_id], &t_file, &c_id).await;
+                match peer_stream {
+                    Ok(mut stream) => {
+                        while let Ok(piece_id) = rx.recv().await {
+                            let downloaded_piece = stream.download_piece(piece_id).await;
+                            match downloaded_piece {
+                                Ok(piece) => {
+                                    let _ = tx.send(piece).await;
+                                },
+                                _ => {
+                                    println!("errore downloading piece");
+                                    //fixme try again for a specific number of times, or just reinsert the value in the to download queue
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        //fixme try recreate the stream
+                        println!("Error creating stream");
+                    }
+                }
+            });
         }
 
+        let number_of_pieces = self.torrent_file.pieces.len();
+        let mut all_pieces = HashSet::with_capacity(number_of_pieces);
+        all_pieces.extend(0..number_of_pieces);
 
-        loop {
-            let piece =
-                Self::message_handler(self, &mut stream, piece_id).await?;
+        //fix me I already know the dimension of everything here following the torrent
+        let mut downloaded_file: Vec<Option<Vec<u8>>> = vec![None; number_of_pieces];
+        //send work to slave
+        for piece in 0..self.torrent_file.pieces.len() {
+            transmitter_work.send(piece).await.unwrap();
+        }
+        drop(transmitter_work); //fixme understand why drop this, i hsould not doning that
 
-            match Self::piece_hash_is_correct(&piece, self.torrent_file.pieces[piece_id as usize]) {
-                true => return Ok(piece),
-                false => continue,
+        let mut completed_pieces = 0;
+
+
+        while let Ok((piece_id, data)) = receiver_piece.recv().await {
+            if Self::piece_hash_is_correct(&data, self.torrent_file.pieces[piece_id]) {
+                println!("Master: ricevuto pezzo {}", piece_id);
+                downloaded_file[piece_id] = Some(data);
+                completed_pieces += 1;
+            } else {
+                //fixme se ha fallito lo rimettiamo dentro a scaricare da qualcun'altro magari
+                println!("Master: Hash fallito per pezzo {}, cosa facciamo?", piece_id);
+            }
+
+            if completed_pieces == 1000 {
+                break;
             }
         }
-
+        Ok(downloaded_file.into_iter().flatten().flatten().collect())
     }
+
+
 }

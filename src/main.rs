@@ -10,6 +10,7 @@ use crate::request::handshake::Handshake;
 use crate::traits::from_bencode::CreateFromBencode;
 use clap::Parser;
 use std::fs;
+use tokio::time::Instant;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
@@ -36,10 +37,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //185.111.109.15, port_number: 38915
     //ip_addr: 185.239.193.44, port_number: 12765
     //ip_addr: 87.90.58.136, port_number: 56844
-
-    let one_client = Client::new(torrent, announce.peers[0]);
-    let piece_received = one_client.download_from_peer(3).await?;
-    println!("{:?}", piece_received.len());
+    let max_peer = announce.peers.len();
+    let one_client = Client::new(torrent, announce.peers);
+    let inizio = Instant::now();
+    let file_torrent = one_client.download_torrent(max_peer).await?;
+    let durata = inizio.elapsed();
+    println!("Tempo totale: {:.2} secondi", durata.as_secs_f32());
+    println!("{:?}", file_torrent.len());
 
     // for peer in &announce.peers {
     //     let peer_id = *b"01234567890123456789";
