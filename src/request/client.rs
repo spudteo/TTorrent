@@ -37,6 +37,8 @@ pub enum ClientError {
     BlockNotPresent(usize),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error("Peer doesn't have the piece id  {0}")]
+    PieceNotPresent(usize)
 }
 
 impl From<Elapsed> for ClientError {
@@ -69,7 +71,7 @@ impl Client {
         hash_value == checksum
     }
 
-    pub async fn download_torrent(&self, number_of_peers: usize) -> Result<Vec<u8>, ClientError> {
+    pub async fn download_torrent(&self, number_of_peers_downloader: usize) -> Result<Vec<u8>, ClientError> {
         let (transmitter_work, receiver_work) = unbounded::<usize>();
         let (transmitter_piece, receiver_piece) = unbounded::<(usize,Vec<u8>)>();
         //fixme investigate arc
@@ -78,9 +80,10 @@ impl Client {
         let peer_info = Arc::new(self.peer.clone());
 
         //create peer to download
-        for slave_id in 1..= number_of_peers {
-            let rx = receiver_work.clone();
-            let tx = transmitter_piece.clone();
+        for slave_id in 1..= number_of_peers_downloader {
+            let r_work = receiver_work.clone();
+            let t_piece = transmitter_piece.clone();
+            let t_work = transmitter_work.clone();
             let t_file = Arc::clone(&torrent_file);
             let c_id = Arc::clone(&client_id);
             let p_info = Arc::clone(&peer_info);
@@ -90,21 +93,22 @@ impl Client {
                 let mut peer_stream = PeerStream::new(slave_id,&p_info[slave_id], &t_file, &c_id).await;
                 match peer_stream {
                     Ok(mut stream) => {
-                        while let Ok(piece_id) = rx.recv().await {
+                        //keep reading if there is work to do
+                        while let Ok(piece_id) = r_work.recv().await {
                             let downloaded_piece = stream.download_piece(piece_id).await;
                             match downloaded_piece {
                                 Ok(piece) => {
-                                    let _ = tx.send(piece).await;
+                                    let _ = t_piece.send(piece).await;
                                 },
                                 _ => {
-                                    println!("errore downloading piece");
-                                    //fixme try again for a specific number of times, or just reinsert the value in the to download queue
+                                    //if it was unable to download the piece, put back the work in the queue
+                                    t_work.send(piece_id).await;
                                 }
                             }
                         }
                     }
                     _ => {
-                        //fixme try recreate the stream
+                        //fixme try recreate the stream until there is no more peer or we have exactly number of peers thread
                         println!("Error creating stream");
                     }
                 }
@@ -121,23 +125,21 @@ impl Client {
         for piece in 0..self.torrent_file.pieces.len() {
             transmitter_work.send(piece).await.unwrap();
         }
-        drop(transmitter_work); //fixme understand why drop this, i hsould not doning that
 
         let mut completed_pieces = 0;
 
-
+        //keep up reading the piece that has been downloaded
         while let Ok((piece_id, data)) = receiver_piece.recv().await {
+            if completed_pieces == self.torrent_file.pieces.len() {
+                break;
+            }
             if Self::piece_hash_is_correct(&data, self.torrent_file.pieces[piece_id]) {
                 println!("Master: ricevuto pezzo {}", piece_id);
                 downloaded_file[piece_id] = Some(data);
                 completed_pieces += 1;
             } else {
-                //fixme se ha fallito lo rimettiamo dentro a scaricare da qualcun'altro magari
-                println!("Master: Hash fallito per pezzo {}, cosa facciamo?", piece_id);
-            }
-
-            if completed_pieces == 1000 {
-                break;
+                //fixme, unwrap
+                transmitter_work.send(piece_id).await.unwrap();
             }
         }
         Ok(downloaded_file.into_iter().flatten().flatten().collect())
