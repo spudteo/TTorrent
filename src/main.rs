@@ -6,10 +6,8 @@ use crate::parser::bencode::parse_bencode;
 use crate::parser::peers::AnnounceResponse;
 use crate::parser::torrent_file::TorrentFile;
 use crate::request::client::Client;
-use crate::request::handshake::Handshake;
 use crate::traits::from_bencode::CreateFromBencode;
 use clap::Parser;
-use log::info;
 use std::fs;
 use tokio::time::Instant;
 
@@ -42,7 +40,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let file_torrent = one_client.download_torrent(max_peer).await?;
     let durata = inizio.elapsed();
     println!("Total time {:.2} sec", durata.as_secs_f32());
-    println!("{:?}", file_torrent.len());
-
+    
     Ok(())
 }

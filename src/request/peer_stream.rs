@@ -1,12 +1,11 @@
 use crate::parser::peers::Peer;
 use crate::parser::torrent_file::TorrentFile;
 use crate::request::client::ClientError::{HandshakeFailed, ServerDoesntHaveFile};
-use crate::request::client::{Client, ClientError};
+use crate::request::client::ClientError;
 use crate::request::handshake::Handshake;
 use crate::request::torrent_message::TorrentMessage;
-use log::{debug, error, info};
+use log::debug;
 use std::collections::HashSet;
-use std::io::Error;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -106,7 +105,7 @@ impl PeerStream {
                                     "{} - received piece.. index:{:?}, beign: {:?}",
                                     self.id, index, begin
                                 );
-                                let block_index = ((begin as usize) / (PAYLOAD_LENGTH as usize));
+                                let block_index = (begin as usize) / (PAYLOAD_LENGTH as usize);
                                 let was_present = missing_block.remove(&block_index);
                                 if was_present {
                                     downloaded_blocks[block_index] = Some(block);
@@ -117,7 +116,7 @@ impl PeerStream {
                             TorrentMessage::Choke => chocked = true,
                             _ => {}
                         },
-                        Err(e) => (), //fixme dovrebbe ritornare un errore
+                        Err(_e) => (), //fixme dovrebbe ritornare un errore
                     }
                 }
             })

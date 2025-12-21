@@ -1,23 +1,15 @@
 use crate::parser::peers::Peer;
 use crate::parser::torrent_file::TorrentFile;
-use crate::request::handshake::Handshake;
 use sha1::{Digest, Sha1};
 use std::collections::{HashMap, HashSet};
-use std::io::Error;
-use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
-use tokio::time::timeout;
 
 use crate::request::peer_stream::PeerStream;
-use crate::request::torrent_message::TorrentMessage;
-use async_channel::{Receiver, Sender, unbounded};
-use log::{debug, error, info};
+use crate::request::storage::TorrentPersisted;
+use async_channel::unbounded;
+use log::{error, info};
 use thiserror::Error;
 use tokio::time::error::Elapsed;
-use tokio::time::sleep;
 
 const PAYLOAD_LENGTH: u32 = 16384;
 
@@ -76,7 +68,7 @@ impl Client {
     pub async fn download_torrent(
         &self,
         number_of_peers_downloader: usize,
-    ) -> Result<Vec<u8>, ClientError> {
+    ) -> Result<(), ClientError> {
         let (transmitter_work, receiver_work) = unbounded::<usize>();
         let (transmitter_piece, receiver_piece) = unbounded::<(usize, Vec<u8>)>();
         //fixme investigate arc
@@ -95,7 +87,7 @@ impl Client {
 
             tokio::spawn(async move {
                 println!("Creating slave downloader {} ", slave_id);
-                let mut peer_stream =
+                let peer_stream =
                     PeerStream::new(slave_id, &p_info[slave_id], &t_file, &c_id).await;
                 match peer_stream {
                     Ok(mut stream) => {
@@ -124,30 +116,41 @@ impl Client {
         let number_of_pieces = self.torrent_file.pieces.len();
         let mut all_pieces = HashSet::with_capacity(number_of_pieces);
         all_pieces.extend(0..number_of_pieces);
-
-        //fixme I already know the dimension of everything here following the torrent
-        let mut downloaded_file: Vec<Option<Vec<u8>>> = vec![None; number_of_pieces];
+        
+        //fixme I already know the dimension of everything here following the torrent, i JUST NEED 
+        //to store the dimension of a flush, in order to save memory 
+        let mut downloaded_file: HashMap<usize, Vec<u8>> = HashMap::with_capacity(number_of_pieces);
         //send work to slave
         for piece in 0..self.torrent_file.pieces.len() {
             transmitter_work.send(piece).await.unwrap();
         }
 
+        let file_dimension = number_of_pieces as u64 * self.torrent_file.piece_length as u64;
+        let mut persisted_file = TorrentPersisted::new(&self.torrent_file.name, file_dimension).await?;
+
         let mut completed_pieces = 0;
 
         //keep up reading the piece that has been downloaded
         while let Ok((piece_id, data)) = receiver_piece.recv().await {
+
             if completed_pieces == self.torrent_file.pieces.len() {
+                persisted_file.write_pieces(&mut downloaded_file, self.torrent_file.piece_length as usize).await?;
                 break;
+            }
+            
+            if completed_pieces % 100 == 0 {
+                persisted_file.write_pieces(&mut downloaded_file, self.torrent_file.piece_length as usize).await?;
             }
             if Self::piece_hash_is_correct(&data, self.torrent_file.pieces[piece_id]) {
                 info!("Received piece number: {}", piece_id);
-                downloaded_file[piece_id] = Some(data);
+                downloaded_file.insert(piece_id, data.clone());
                 completed_pieces += 1;
             } else {
                 //fixme, unwrap
                 transmitter_work.send(piece_id).await.unwrap();
             }
         }
-        Ok(downloaded_file.into_iter().flatten().flatten().collect())
+        Ok(())
     }
+    
 }

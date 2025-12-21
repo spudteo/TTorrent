@@ -1,16 +1,13 @@
 use percent_encoding::{NON_ALPHANUMERIC, percent_encode};
-use std::io::Read;
 
-use crate::parser::bencode;
 use crate::parser::bencode::{BencodeValue, encode_bencode};
-use sha1::digest::typenum::Length;
 use sha1::{Digest, Sha1};
 use url::Url;
 
 #[derive(Debug, Clone)]
 pub struct TorrentFile {
     pub announce: String,
-    name: String,
+    pub name: String,
     length: i64,
     pub piece_length: i64,
     pub pieces: Vec<[u8; 20]>,
