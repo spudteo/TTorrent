@@ -1,7 +1,7 @@
 use crate::parser::peers::Peer;
 use crate::parser::torrent_file::TorrentFile;
-use crate::request::client::ClientError::{HandshakeFailed, ServerDoesntHaveFile};
 use crate::request::client::ClientError;
+use crate::request::client::ClientError::{HandshakeFailed, ServerDoesntHaveFile};
 use crate::request::handshake::Handshake;
 use crate::request::torrent_message::TorrentMessage;
 use log::debug;
@@ -114,6 +114,7 @@ impl PeerStream {
                             TorrentMessage::KeepAlive => (),
                             TorrentMessage::Bitfield { .. } => (),
                             TorrentMessage::Choke => chocked = true,
+                            TorrentMessage::Unchoke => chocked = false,
                             _ => {}
                         },
                         Err(_e) => (), //fixme dovrebbe ritornare un errore

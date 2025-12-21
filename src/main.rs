@@ -20,7 +20,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
     let bencode_byte = fs::read(&args.file)?;
 
@@ -32,14 +32,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let body_bytes = response.bytes().await?;
     let announce_response = parse_bencode(&body_bytes);
     let announce = AnnounceResponse::parse(&announce_response.0);
-    println!("{:?}", announce);
-
     let max_peer = announce.peers.len();
     let one_client = Client::new(torrent, announce.peers);
-    let inizio = Instant::now();
-    let file_torrent = one_client.download_torrent(max_peer).await?;
-    let durata = inizio.elapsed();
-    println!("Total time {:.2} sec", durata.as_secs_f32());
-    
+    one_client.download_torrent(max_peer).await?;
+
     Ok(())
 }

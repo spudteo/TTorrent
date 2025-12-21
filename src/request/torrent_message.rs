@@ -49,7 +49,7 @@ impl TorrentMessage {
                 begin: u32::from_be_bytes(input_stream[5..9].try_into().unwrap()),
                 block: input_stream[9..].to_vec(),
             },
-            _ => panic!("invalid torrent message received"), //fix me
+            _ => panic!("invalid torrent message received"), //FIXME
         }
     }
 
