@@ -1,7 +1,6 @@
 use crate::parser::bencode::BencodeValue;
 use crate::traits::from_bencode::CreateFromBencode;
-use std::net::{IpAddr, Ipv4Addr};
-use url::Host::Ipv4;
+use std::net::IpAddr;
 
 #[derive(Debug, Copy, Clone)]
 pub struct Peer {
@@ -51,7 +50,7 @@ impl AnnounceResponse {
     fn parse_ip(ip: &String) -> Result<IpAddr, String> {
         let parsed = ip.parse::<IpAddr>();
         match parsed {
-            Err(e) => Err("problem wihile parsing ip {ip}".to_string()),
+            Err(_e) => Err("problem wihile parsing ip {ip}".to_string()),
             Ok(ip) => Ok(ip),
         }
     }

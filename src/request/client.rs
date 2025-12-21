@@ -1,23 +1,15 @@
 use crate::parser::peers::Peer;
 use crate::parser::torrent_file::TorrentFile;
-use crate::request::handshake::Handshake;
 use sha1::{Digest, Sha1};
 use std::collections::{HashMap, HashSet};
-use std::io::Error;
-use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
-use tokio::time::timeout;
 
-use crate::request::torrent_message::TorrentMessage;
+use crate::request::peer_stream::PeerStream;
+use crate::request::storage::TorrentPersisted;
+use async_channel::{RecvError, unbounded};
+use log::{debug, error, info};
 use thiserror::Error;
 use tokio::time::error::Elapsed;
-use crate::request::peer_stream::PeerStream;
-use async_channel::{unbounded, Receiver, Sender};
-use tokio::time::sleep;
-use log::{info, error, debug};
 
 const PAYLOAD_LENGTH: u32 = 16384;
 
@@ -40,11 +32,18 @@ pub enum ClientError {
     #[error("Peer doesn't have the piece id  {0}")]
     PieceNotPresent(usize),
     #[error("Handshake of the server was not the one we expected")]
-    ServerDoesntHaveFile
+    ServerDoesntHaveFile,
+    #[error("Error in the channel receiver or transmitter")]
+    ChannelReceiverError,
 }
 
 impl From<Elapsed> for ClientError {
     fn from(_: Elapsed) -> Self {
+        ClientError::Timeout
+    }
+}
+impl From<async_channel::RecvError> for ClientError {
+    fn from(value: RecvError) -> Self {
         ClientError::Timeout
     }
 }
@@ -73,16 +72,19 @@ impl Client {
         hash_value == checksum
     }
 
-    pub async fn download_torrent(&self, number_of_peers_downloader: usize) -> Result<Vec<u8>, ClientError> {
+    pub async fn download_torrent(
+        &self,
+        number_of_peers_downloader: usize,
+    ) -> Result<(), ClientError> {
         let (transmitter_work, receiver_work) = unbounded::<usize>();
-        let (transmitter_piece, receiver_piece) = unbounded::<(usize,Vec<u8>)>();
+        let (transmitter_piece, receiver_piece) = unbounded::<(usize, Vec<u8>)>();
         //fixme investigate arc
         let torrent_file = Arc::new(self.torrent_file.clone());
         let client_id = Arc::new(self.client_peer_id.clone());
         let peer_info = Arc::new(self.peer.clone());
 
         //create peer to download
-        for slave_id in 1..= number_of_peers_downloader {
+        for slave_id in 1..=number_of_peers_downloader {
             let r_work = receiver_work.clone();
             let t_piece = transmitter_piece.clone();
             let t_work = transmitter_work.clone();
@@ -92,7 +94,8 @@ impl Client {
 
             tokio::spawn(async move {
                 println!("Creating slave downloader {} ", slave_id);
-                let mut peer_stream = PeerStream::new(slave_id,&p_info[slave_id], &t_file, &c_id).await;
+                let peer_stream =
+                    PeerStream::new(slave_id, &p_info[slave_id], &t_file, &c_id).await;
                 match peer_stream {
                     Ok(mut stream) => {
                         //keep reading if there is work to do
@@ -101,7 +104,7 @@ impl Client {
                             match downloaded_piece {
                                 Ok(piece) => {
                                     let _ = t_piece.send(piece).await;
-                                },
+                                }
                                 _ => {
                                     //if it was unable to download the piece, put back the work in the queue
                                     t_work.send(piece_id).await;
@@ -121,31 +124,71 @@ impl Client {
         let mut all_pieces = HashSet::with_capacity(number_of_pieces);
         all_pieces.extend(0..number_of_pieces);
 
-        //fix me I already know the dimension of everything here following the torrent
-        let mut downloaded_file: Vec<Option<Vec<u8>>> = vec![None; number_of_pieces];
-        //send work to slave
-        for piece in 0..self.torrent_file.pieces.len() {
-            transmitter_work.send(piece).await.unwrap();
+        //fixme I already know the dimension of everything here following the torrent, i JUST NEED
+        //to store the dimension of a flush, in order to save memory
+        let mut downloaded_file: HashMap<usize, Vec<u8>> = HashMap::with_capacity(number_of_pieces);
+        let file_dimension = number_of_pieces as u64 * self.torrent_file.piece_length as u64;
+        let mut persisted_file =
+            TorrentPersisted::new(&self.torrent_file.name, file_dimension).await?;
+
+        //send work to slave reading from  checkpoint
+        let mut piece_to_download: HashSet<usize> = HashSet::with_capacity(number_of_pieces);
+        piece_to_download.extend(0..number_of_pieces);
+        let piece_already_downloaded = persisted_file.read_checkpoint().await?;
+
+        for piece in piece_to_download.difference(&piece_already_downloaded) {
+            transmitter_work.send(*piece).await.unwrap();
         }
 
-        let mut completed_pieces = 0;
+        info!(
+            "Total pieces: {}, Pieces still to download: {}",
+            number_of_pieces,
+            piece_to_download
+                .difference(&piece_already_downloaded)
+                .count()
+        );
+
+        let mut completed_pieces = piece_already_downloaded.len();
 
         //keep up reading the piece that has been downloaded
-        while let Ok((piece_id, data)) = receiver_piece.recv().await {
+        info! {"completed pieces {}", completed_pieces}
+
+        loop {
             if completed_pieces == self.torrent_file.pieces.len() {
+                persisted_file
+                    .write_pieces(
+                        &mut downloaded_file,
+                        self.torrent_file.piece_length as usize,
+                    )
+                    .await?;
                 break;
             }
-            if Self::piece_hash_is_correct(&data, self.torrent_file.pieces[piece_id]) {
-                info!("Received piece number: {}", piece_id);
-                downloaded_file[piece_id] = Some(data);
+
+            let received_piece = receiver_piece.recv().await?;
+            info! {"completed pieces {}", completed_pieces}
+            info! {"asd {}", self.torrent_file.pieces.len()}
+
+            if completed_pieces % 100 == 0 {
+                persisted_file
+                    .write_pieces(
+                        &mut downloaded_file,
+                        self.torrent_file.piece_length as usize,
+                    )
+                    .await?;
+            }
+            if Self::piece_hash_is_correct(
+                &received_piece.1,
+                self.torrent_file.pieces[received_piece.0],
+            ) {
+                info!("Received piece number: {}", received_piece.0);
+                downloaded_file.insert(received_piece.0, received_piece.1.clone());
                 completed_pieces += 1;
             } else {
-                //fixme, unwrap
-                transmitter_work.send(piece_id).await.unwrap();
+                info!("Resend the piece to queue {} ", &received_piece.0);
+                transmitter_work.send(received_piece.0).await.unwrap();
             }
         }
-        Ok(downloaded_file.into_iter().flatten().flatten().collect())
+
+        Ok(())
     }
-
-
 }

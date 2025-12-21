@@ -6,11 +6,9 @@ use crate::parser::bencode::parse_bencode;
 use crate::parser::peers::AnnounceResponse;
 use crate::parser::torrent_file::TorrentFile;
 use crate::request::client::Client;
-use crate::request::handshake::Handshake;
 use crate::traits::from_bencode::CreateFromBencode;
 use clap::Parser;
 use std::fs;
-use log::info;
 use tokio::time::Instant;
 
 #[derive(Parser, Debug)]
@@ -22,7 +20,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
     let bencode_byte = fs::read(&args.file)?;
 
@@ -34,16 +32,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let body_bytes = response.bytes().await?;
     let announce_response = parse_bencode(&body_bytes);
     let announce = AnnounceResponse::parse(&announce_response.0);
-    println!("{:?}", announce);
-
-
     let max_peer = announce.peers.len();
     let one_client = Client::new(torrent, announce.peers);
-    let inizio = Instant::now();
-    let file_torrent = one_client.download_torrent(max_peer).await?;
-    let durata = inizio.elapsed();
-    println!("Total time {:.2} sec", durata.as_secs_f32());
-    println!("{:?}", file_torrent.len());
+    one_client.download_torrent(max_peer).await?;
 
     Ok(())
 }
