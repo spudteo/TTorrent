@@ -6,17 +6,15 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
-#[derive(Debug)]
+#[derive(Debug,Clone,Copy)]
 pub struct Handshake {
     pstrlen: u8,
     pstr: [u8; 19],
     reserved: [u8; 8],
-    info_hash: [u8; 20],
+    pub info_hash: [u8; 20],
     peer_id: [u8; 20],
 }
 
-// handshake: <pstrlen><pstr><reserved><info_hash><peer_id>
-//1:19:8:20:20
 
 impl Handshake {
     pub fn new(info_hash: [u8; 20], peer_id: &[u8; 20]) -> Self {

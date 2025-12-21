@@ -1,5 +1,3 @@
-use crate::request::message::Message;
-
 #[derive(Debug, PartialEq)]
 enum MessageID {
     Choke = 0,
