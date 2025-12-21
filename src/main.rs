@@ -36,30 +36,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let announce = AnnounceResponse::parse(&announce_response.0);
     println!("{:?}", announce);
 
-    //185.111.109.15, port_number: 38915
-    //ip_addr: 185.239.193.44, port_number: 12765
-    //ip_addr: 87.90.58.136, port_number: 56844
+
     let max_peer = announce.peers.len();
     let one_client = Client::new(torrent, announce.peers);
     let inizio = Instant::now();
     let file_torrent = one_client.download_torrent(max_peer).await?;
     let durata = inizio.elapsed();
-    println!("Tempo totale: {:.2} secondi", durata.as_secs_f32());
+    println!("Total time {:.2} sec", durata.as_secs_f32());
     println!("{:?}", file_torrent.len());
-
-    // for peer in &announce.peers {
-    //     let peer_id = *b"01234567890123456789";
-    //     let handshake = Handshake::new(torrent.info_hash, peer_id);
-    //     let peer_hand_result = handshake.shake(peer).await;
-    //     match peer_hand_result {
-    //         Ok(peer_hand) => {
-    //             println!("handshake done {:?}", peer_hand);
-    //             let peer_handshake = Handshake::parse(peer_hand);
-    //             println!("handshake done {:?}", peer_handshake);
-    //         }
-    //         Err(e) => continue
-    //     }
-    // }
 
     Ok(())
 }
