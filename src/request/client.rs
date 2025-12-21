@@ -11,7 +11,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
-use crate::request::message::Message;
 use crate::request::torrent_message::TorrentMessage;
 use thiserror::Error;
 use tokio::time::error::Elapsed;

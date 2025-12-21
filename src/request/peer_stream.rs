@@ -2,7 +2,6 @@ use crate::parser::peers::Peer;
 use crate::parser::torrent_file::TorrentFile;
 use crate::request::client::{Client, ClientError};
 use crate::request::handshake::Handshake;
-use crate::request::message::Bitfield;
 use crate::request::torrent_message::TorrentMessage;
 use std::collections::HashSet;
 use std::io::Error;
