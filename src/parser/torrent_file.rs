@@ -10,6 +10,7 @@ use url::Url;
 #[derive(Debug, Clone,Deserialize, Serialize)]
 pub struct TorrentInfo {
     pub name: String,
+    length : usize,
     #[serde(rename = "piece length")]
     pub piece_length: usize,
     #[serde(with = "serde_bytes")]
@@ -57,7 +58,7 @@ impl TorrentFile {
     }
 
     pub fn compute_info_hash(&self) -> [u8; 20] {
-        let encoded = serde_bencode::to_bytes(self).unwrap();
+        let encoded = serde_bencode::to_bytes(&self.info).unwrap();
         let mut hasher = Sha1::new();
         hasher.update(&encoded);
         let hash = hasher.finalize();
