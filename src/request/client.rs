@@ -2,6 +2,7 @@ use crate::parser::peers::Peer;
 use crate::parser::torrent_file::TorrentFile;
 use sha1::{Digest, Sha1};
 use std::collections::{HashMap, HashSet};
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::request::peer_stream::PeerStream;
@@ -50,12 +51,12 @@ impl From<async_channel::RecvError> for ClientError {
 
 pub struct Client {
     torrent_file: TorrentFile,
-    peer: Vec<Peer>,
+    peer: Vec<SocketAddr>,
     client_peer_id: [u8; 20],
 }
 
 impl Client {
-    pub fn new(torrent_file: TorrentFile, peer: Vec<Peer>) -> Client {
+    pub fn new(torrent_file: TorrentFile, peer: Vec<SocketAddr>) -> Client {
         let client_per_id = *b"01234567890123456789";
         Self {
             torrent_file,

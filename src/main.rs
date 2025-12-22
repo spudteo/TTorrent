@@ -27,10 +27,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("requesting peers...");
     let response = reqwest::get(torrent.build_tracker_url()?).await?;
     let body_bytes = response.bytes().await?;
-    let announce_response = parse_bencode(&body_bytes);
-    let announce = AnnounceResponse::parse(&announce_response.0);
-    let max_peer = announce.peers.len();
-    let one_client = Client::new(torrent, announce.peers);
+    println!("{}", String::from_utf8_lossy(&body_bytes));
+    let announce: AnnounceResponse = serde_bencode::from_bytes(&body_bytes).unwrap();
+    let max_peer = announce.get_peers_number();
+    let one_client = Client::new(torrent, announce.get_peers());
     one_client.download_torrent(max_peer).await?;
 
     Ok(())

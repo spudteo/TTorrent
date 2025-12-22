@@ -43,17 +43,13 @@ pub struct TorrentFile {
 impl TorrentFile {
 
     pub fn build_tracker_url(&self) -> Result<String, Box<dyn std::error::Error>> {
-
         let mut url = Url::parse(self.announce.as_ref().unwrap())?;
-
         let info_hash_encoded = percent_encode(&self.compute_info_hash(), NON_ALPHANUMERIC).to_string();
-
         let query = format!(
             "info_hash={}&peer_id={}",
             info_hash_encoded, "01234567890123456789"
         );
         url.set_query(Some(&query));
-        println!("url: {}", url);
         Ok(url.to_string())
     }
 

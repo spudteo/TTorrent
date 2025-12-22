@@ -25,13 +25,12 @@ pub struct PeerStream {
 impl PeerStream {
     pub async fn new(
         id: usize,
-        peer: &Peer,
+        peer: &SocketAddr,
         torrent_file: &TorrentFile,
         client_peer_id: &[u8; 20],
     ) -> Result<Self, ClientError> {
         //create connection to peer
-        let socket = SocketAddr::new(peer.ip_addr, peer.port_number as u16);
-        let mut stream = timeout(Duration::from_secs(5), TcpStream::connect(socket)).await??;
+        let mut stream = timeout(Duration::from_secs(5), TcpStream::connect(peer)).await??;
         //handshake
         let handshake = Handshake::new(torrent_file.compute_info_hash(), client_peer_id);
         Self::make_handshake(&mut stream, &handshake).await?;
