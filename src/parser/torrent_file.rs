@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use percent_encoding::{NON_ALPHANUMERIC, percent_encode};
 use serde::{Deserialize, Serialize};
-use crate::parser::bencode::{BencodeValue, encode_bencode};
 use sha1::{Digest, Sha1};
 use url::Url;
 

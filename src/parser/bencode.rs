@@ -162,56 +162,6 @@ pub fn parse_bencode(input_slice: &[u8]) -> (BencodeValue, usize) {
     }
 }
 
-pub fn encode_bencode(value: &BencodeValue) -> Vec<u8> {
-    //ai generated, to check adn tested TBD
-    match value {
-        BencodeValue::Integer(bytes) => {
-            let mut out = Vec::new();
-            out.extend_from_slice(b"i");
-            out.extend_from_slice(bytes);
-            out.extend_from_slice(b"e");
-            out
-        }
-
-        BencodeValue::String(bytes) => {
-            let mut out = Vec::new();
-            out.extend_from_slice(bytes.len().to_string().as_bytes());
-            out.extend_from_slice(b":");
-            out.extend_from_slice(bytes);
-            out
-        }
-
-        BencodeValue::List(list) => {
-            let mut out = Vec::new();
-            out.extend_from_slice(b"l");
-            for item in list {
-                out.extend_from_slice(&encode_bencode(item));
-            }
-            out.extend_from_slice(b"e");
-            out
-        }
-
-        BencodeValue::Dictionary(dict) => {
-            let mut out = Vec::new();
-            out.extend_from_slice(b"d");
-            let mut keys: Vec<&Vec<u8>> = dict.keys().collect();
-            keys.sort();
-            for key in keys {
-                out.extend_from_slice(key.len().to_string().as_bytes());
-                out.extend_from_slice(b":");
-                out.extend_from_slice(key);
-                out.extend_from_slice(&encode_bencode(&dict[key]));
-            }
-            out.extend_from_slice(b"e");
-            out
-        }
-
-        BencodeValue::Error(_) => {
-            panic!("Cannot encode Error variant")
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
